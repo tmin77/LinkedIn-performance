@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Posit LinkedIn Analytics</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.8.0/Recharts.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:#f8f9fb;color:#111827}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
+.pcard{transition:border-color .15s,box-shadow .15s;cursor:pointer}
+.pcard:hover{border-color:#93c5fd!important;box-shadow:0 2px 10px rgba(59,130,246,.1)}
+.tbtn{transition:all .15s;cursor:pointer;font-family:'DM Sans',sans-serif}
+.tbtn:hover{opacity:.85;transform:translateY(-1px)}
+input,select{font-family:'DM Sans',sans-serif}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useCallback,useRef}=React;
+const {AreaChart,Area,BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,CartesianGrid,Legend,LineChart,Line}=Recharts;
+
+function parseFullCSV(text){
+  const rows=[];let row=[],field="",inQuote=false;
+  const t=text.replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  for(let i=0;i<t.length;i++){
+    const ch=t[i];
+    if(inQuote){if(ch==='"'&&t[i+1]==='"'){field+='"';i++;}else if(ch==='"'){inQuote=false;}else{field+=ch;}}
+    else{if(ch==='"'){inQuote=true;}else if(ch===','){row.push(field);field="";}else if(ch==='\n'){row.push(field);rows.push(row);row=[];field="";}else{field+=ch;}}
+  }
+  if(field||row.length){row.push(field);rows.push(row);}
+  return rows;
+}
+function parsePostsCSV(text){
+  const rows=parseFullCSV(text);if(rows.length<4)return[];
+  return rows.slice(3).map((cols,i)=>{
+    const title=(cols[0]||"").trim();if(title.length<3)return null;
+    const date=(cols[5]||"").trim();const rawType=(cols[2]||"Organic").trim();
+    return{id:i,title,link:(cols[1]||"").trim(),type:rawType,distroTag:rawType==="Sponsored"?"sponsored":"organic",
+      postedBy:(cols[4]||"").trim(),date,month:date.length>=7?date.slice(0,2)+"/"+date.slice(6):"",
+      impressions:parseFloat(cols[9])||0,clicks:parseFloat(cols[12])||0,likes:parseFloat(cols[14])||0,
+      comments:parseFloat(cols[15])||0,reposts:parseFloat(cols[16])||0,engRate:parseFloat(cols[18])||0,
+      contentType:(cols[19]||"").trim(),tag:null};
+  }).filter(Boolean);
+}
+function parseMetricsCSV(text){
+  const rows=parseFullCSV(text);if(rows.length<4)return[];
+  return rows.slice(3).map(cols=>{
+    const date=(cols[0]||"").trim();if(!date||date==="Date")return null;
+    return{date,impressionsOrganic:parseFloat(cols[1])||0,impressionsSponsored:parseFloat(cols[2])||0,
+      impressionsTotal:parseFloat(cols[3])||0,clicksTotal:parseFloat(cols[7])||0,
+      reactionsOrganic:parseFloat(cols[8])||0,commentsOrganic:parseFloat(cols[11])||0,
+      repostsOrganic:parseFloat(cols[14])||0,engRateOrganic:parseFloat(cols[17])||0,engRateSponsored:parseFloat(cols[18])||0};
+  }).filter(Boolean);
+}
+function parseFollowersCSV(text){
+  const rows=parseFullCSV(text);if(rows.length<3)return[];
+  let hi=0;
+  for(let i=0;i<Math.min(5,rows.length);i++){const r=rows[i].map(c=>c.toLowerCase());if(r.some(c=>c.includes("date")||c.includes("follower"))){hi=i;break;}}
+  const headers=rows[hi].map(h=>h.trim().toLowerCase());
+  const di=headers.findIndex(h=>h.includes("date"));
+  const ti=headers.findIndex(h=>h.includes("total")||h.includes("count")||h.includes("follower"));
+  const gi=headers.findIndex(h=>h.includes("gain")||h.includes("new"));
+  const li=headers.findIndex(h=>h.includes("lost")||h.includes("unfollow"));
+  return rows.slice(hi+1).map(cols=>{
+    const date=(cols[di>=0?di:0]||"").trim();if(!date||date.toLowerCase()==="date")return null;
+    return{date,total:parseFloat(cols[ti>=0?ti:1])||0,gained:parseFloat(cols[gi>=0?gi:2])||0,lost:parseFloat(cols[li>=0?li:3])||0};
+  }).filter(d=>d&&d.date&&(d.total>0||d.gained>0));
+}
+
+const DEMO_POSTS=[
+  {id:0,title:"🗞️ Here's the latest edition of the Posit AI newsletter — your biweekly roundup of AI news from Posit and beyond.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7433238223956504576",type:"Organic",distroTag:"organic",postedBy:"Isabella Velásquez",date:"02/27/2026",month:"02/2026",impressions:3365,clicks:132,likes:15,comments:0,reposts:1,engRate:0.044,contentType:"",tag:null},
+  {id:1,title:"We often hear from teams looking for a smoother path from open-source theory to real-world clinical practice. Explore the Pharmaverse Examples site.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7433214310954459136",type:"Organic",distroTag:"organic",postedBy:"Tyler Minear",date:"02/27/2026",month:"02/2026",impressions:4449,clicks:113,likes:40,comments:3,reposts:7,engRate:0.037,contentType:"Article",tag:null},
+  {id:2,title:"posit::conf(2026) speakers have arrived! Wes McKinney, Christine Y. Zhang (NYT Graphics), Emily Riederer, and more.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7433181951139745792",type:"Organic",distroTag:"organic",postedBy:"Posit Page",date:"02/25/2026",month:"02/2026",impressions:12800,clicks:640,likes:198,comments:22,reposts:45,engRate:0.108,contentType:"",tag:null},
+  {id:3,title:"Posit Connect makes it easy to deploy Shiny apps, R Markdown reports, Jupyter notebooks — all in one secure enterprise platform.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7432456789012345678",type:"Sponsored",distroTag:"sponsored",postedBy:"Posit Page",date:"02/20/2026",month:"02/2026",impressions:18500,clicks:742,likes:52,comments:7,reposts:12,engRate:0.035,contentType:"",tag:null},
+  {id:4,title:"R 4.4 ships with improvements to the base pipe operator. Here's a quick breakdown of what changed and why it matters for your workflows.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7431234567890123456",type:"Organic",distroTag:"organic",postedBy:"Isabella Velásquez",date:"02/15/2026",month:"02/2026",impressions:9870,clicks:520,likes:143,comments:18,reposts:29,engRate:0.089,contentType:"",tag:null},
+  {id:5,title:"Quarto 1.5 is here 🎉 New: improved typst rendering, better cross-reference support, live preview enhancements. Free and open-source!",link:"https://www.linkedin.com/feed/update/urn:li:activity:7430123456789012345",type:"Organic",distroTag:"organic",postedBy:"Mine Çetinkaya-Rundel",date:"02/05/2026",month:"02/2026",impressions:14300,clicks:680,likes:267,comments:31,reposts:58,engRate:0.124,contentType:"",tag:null},
+  {id:6,title:"Posit Workbench gives enterprise data science teams a centralized, secure environment for R, Python, and more.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7429012345678901234",type:"Sponsored",distroTag:"sponsored",postedBy:"Posit Page",date:"01/28/2026",month:"01/2026",impressions:22100,clicks:890,likes:41,comments:5,reposts:8,engRate:0.031,contentType:"",tag:null},
+  {id:7,title:"tidymodels just got better. The new {stacks} release supports blending predictions from dozens of candidate models. Open-source and tidyverse-native.",link:"https://www.linkedin.com/feed/update/urn:li:activity:7428901234567890123",type:"Organic",distroTag:"organic",postedBy:"Max Kuhn",date:"01/20/2026",month:"01/2026",impressions:8900,clicks:410,likes:189,comments:24,reposts:41,engRate:0.097,contentType:"",tag:null},
+];
+const DEMO_METRICS=(()=>{const r=[];for(let i=0;i<60;i++){const d=new Date(2026,0,i+1);const org=Math.round(3000+Math.random()*15000+Math.sin(i/7)*3000);const spon=Math.round(50000+Math.random()*80000+Math.cos(i/5)*10000);r.push({date:`${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}/${d.getFullYear()}`,impressionsOrganic:org,impressionsSponsored:spon,impressionsTotal:org+spon,clicksTotal:Math.round((org+spon)*0.012),reactionsOrganic:Math.round(org*0.04),commentsOrganic:Math.round(org*0.003),repostsOrganic:Math.round(org*0.008),engRateOrganic:0.04+Math.random()*0.06,engRateSponsored:0.006+Math.random()*0.01});}return r;})();
+const DEMO_FOLLOWERS=(()=>{const r=[];let base=42000;for(let i=0;i<12;i++){const d=new Date(2025,2+i,1);const gained=i<5?Math.round(800+Math.random()*400):Math.round(180+Math.random()*120);const lost=Math.round(40+Math.random()*30);base+=gained-lost;r.push({date:`${String(d.getMonth()+1).padStart(2,"0")}/01/${d.getFullYear()}`,total:base,gained,lost});}return r;})();
+
+const fmt=n=>n>=1000000?(n/1000000).toFixed(1)+"M":n>=1000?(n/1000).toFixed(1)+"k":String(Math.round(n));
+const pct=n=>(n*100).toFixed(1)+"%";
+const sum=(arr,k)=>arr.reduce((a,x)=>a+(x[k]||0),0);
+const avg=(arr,k)=>arr.length?sum(arr,k)/arr.length:0;
+const TAG_META={"open-source":{label:"Open Source",color:"#10b981",bg:"#d1fae5",text:"#065f46",border:"#6ee7b7"},"enterprise":{label:"Enterprise",color:"#3b82f6",bg:"#dbeafe",text:"#1e40af",border:"#93c5fd"},"both":{label:"Both",color:"#8b5cf6",bg:"#ede9fe",text:"#4c1d95",border:"#c4b5fd"}};
+const DISTRO_META={"organic":{label:"Organic",color:"#0a66c2",bg:"#eff6ff",text:"#1e40af",border:"#bfdbfe"},"sponsored":{label:"Sponsored",color:"#f59e0b",bg:"#fef3c7",text:"#92400e",border:"#fde68a"}};
+
+function TagBadge({tag}){if(!tag)return<span style={{fontSize:11,padding:"2px 8px",borderRadius:99,background:"#f3f4f6",color:"#9ca3af",border:"1px solid #e5e7eb",fontWeight:600}}>Untagged</span>;const m=TAG_META[tag];return<span style={{fontSize:11,padding:"2px 8px",borderRadius:99,background:m.bg,color:m.text,border:`1px solid ${m.border}`,fontWeight:700}}>{m.label}</span>;}
+function DistroBadge({tag}){if(!tag)return null;const m=DISTRO_META[tag];if(!m)return null;return<span style={{fontSize:11,padding:"2px 8px",borderRadius:99,background:m.bg,color:m.text,border:`1px solid ${m.border}`,fontWeight:700}}>{m.label}</span>;}
+function KpiCard({label,value,sub,accent}){return(<div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:"16px 20px"}}><div style={{fontSize:24,fontWeight:800,color:accent||"#111827",fontFamily:"'DM Serif Display',serif"}}>{value}</div><div style={{fontSize:13,fontWeight:600,color:"#374151",marginTop:2}}>{label}</div>{sub&&<div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{sub}</div>}</div>);}
+const Tip=({active,payload,label})=>{if(!active||!payload?.length)return null;return(<div style={{background:"#1f2937",borderRadius:8,padding:"10px 14px",color:"#f9fafb",fontSize:12,maxWidth:220}}><div style={{fontWeight:700,marginBottom:4,color:"#e5e7eb"}}>{label}</div>{payload.map((p,i)=>(<div key={i} style={{display:"flex",gap:8,alignItems:"center",marginTop:2}}><span style={{width:8,height:8,borderRadius:2,background:p.color,display:"inline-block",flexShrink:0}}></span><span style={{color:"#d1d5db"}}>{p.name}:</span><span style={{fontWeight:700}}>{typeof p.value==="number"&&p.value<1?pct(p.value):fmt(p.value)}</span></div>))}</div>);};
+
+function App(){
+  const [posts,setPosts]=useState(DEMO_POSTS);
+  const [metrics,setMetrics]=useState(DEMO_METRICS);
+  const [followers,setFollowers]=useState(DEMO_FOLLOWERS);
+  const [isDemo,setIsDemo]=useState(true);
+  const [tab,setTab]=useState("overview");
+  const [tagFilter,setTagFilter]=useState("all");
+  const [distroFilter,setDistroFilter]=useState("all");
+  const [search,setSearch]=useState("");
+  const [expanded,setExpanded]=useState(null);
+  const [sortBy,setSortBy]=useState("date");
+  const [chartView,setChartView]=useState("impressions");
+  const postsRef=useRef(),metricsRef=useRef(),followersRef=useRef();
+
+  const readFile=(ref,parser,onSuccess)=>{const f=ref.current?.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const p=parser(ev.target.result);if(p.length){onSuccess(p);}else{alert("Could not parse CSV.");}};r.readAsText(f);};
+  const setTag=useCallback((id,tag)=>{setPosts(prev=>prev.map(p=>p.id===id?{...p,tag}:p));setExpanded(null);},[]);
+  const setDistroTag=useCallback((id,distroTag)=>{setPosts(prev=>prev.map(p=>p.id===id?{...p,distroTag}:p));},[]);
+  const exportCSV=()=>{const cols=["date","postedBy","type","distroTag","impressions","clicks","likes","comments","reposts","engRate","tag","title","link"];const esc=v=>{const s=String(v??'');return(s.includes(",")||s.includes('"')||s.includes("\n"))?`"${s.replace(/"/g,'""')}"`:`${s}`;};const body=posts.map(p=>cols.map(c=>esc(p[c])).join(",")).join("\n");const blob=new Blob([cols.join(",")+"\n"+body],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="posit_linkedin_tagged.csv";a.click();};
+
+  const taggedPosts=useMemo(()=>posts.filter(p=>p.tag),[posts]);
+  const filteredPosts=useMemo(()=>{let p=posts;if(tagFilter!=="all")p=p.filter(x=>tagFilter==="untagged"?!x.tag:x.tag===tagFilter);if(distroFilter!=="all")p=p.filter(x=>x.distroTag===distroFilter);if(search){const q=search.toLowerCase();p=p.filter(x=>x.title.toLowerCase().includes(q)||x.postedBy.toLowerCase().includes(q));}return[...p].sort((a,b)=>{if(sortBy==="impressions")return b.impressions-a.impressions;if(sortBy==="engRate")return b.engRate-a.engRate;if(sortBy==="likes")return b.likes-a.likes;return b.id-a.id;});},[posts,tagFilter,distroFilter,search,sortBy]);
+  const monthlyMetrics=useMemo(()=>{const m={};metrics.forEach(d=>{const parts=d.date.split("/");if(parts.length<3)return;const key=`${parts[2]}-${parts[0]}`;if(!m[key])m[key]={label:`${parts[0]}/${parts[2]}`,org:0,spon:0,eng:[],clicks:0};m[key].org+=d.impressionsOrganic;m[key].spon+=d.impressionsSponsored;m[key].eng.push(d.engRateOrganic);m[key].clicks+=d.clicksTotal||0;});return Object.entries(m).sort(([a],[b])=>a.localeCompare(b)).map(([,w])=>({label:w.label,"Organic":w.org,"Sponsored":w.spon,"Avg Eng Rate":w.eng.length?w.eng.reduce((a,v)=>a+v,0)/w.eng.length:0,"Clicks":w.clicks}));},[metrics]);
+  const tagStats=useMemo(()=>{const r={};Object.keys(TAG_META).forEach(t=>{const all=posts.filter(x=>x.tag===t);const org=all.filter(x=>x.distroTag==="organic");const spon=all.filter(x=>x.distroTag==="sponsored");r[t]={count:all.length,impressions:sum(all,"impressions"),likes:sum(all,"likes"),clicks:sum(all,"clicks"),engRate:avg(all,"engRate"),organic:{count:org.length,impressions:sum(org,"impressions"),engRate:avg(org,"engRate")},sponsored:{count:spon.length,impressions:sum(spon,"impressions"),engRate:avg(spon,"engRate")}};});return r;},[posts]);
+  const distroTagStats=useMemo(()=>{const o=posts.filter(p=>p.distroTag==="organic"&&p.tag);const s=posts.filter(p=>p.distroTag==="sponsored"&&p.tag);return{organic:{count:o.length,impressions:sum(o,"impressions"),engRate:avg(o,"engRate"),likes:sum(o,"likes")},sponsored:{count:s.length,impressions:sum(s,"impressions"),engRate:avg(s,"engRate"),likes:sum(s,"likes")}};},[posts]);
+  const postVolumeByMonth=useMemo(()=>{const m={};posts.filter(p=>p.tag).forEach(p=>{if(!p.month)return;if(!m[p.month])m[p.month]={label:p.month,"Open Source":0,"Enterprise":0,"Both":0};if(p.tag==="open-source")m[p.month]["Open Source"]++;else if(p.tag==="enterprise")m[p.month]["Enterprise"]++;else if(p.tag==="both")m[p.month]["Both"]++;});return Object.entries(m).sort(([a],[b])=>{const[am,ay]=a.split("/");const[bm,by]=b.split("/");return ay!==by?ay.localeCompare(by):am.localeCompare(bm);}).map(([,v])=>v);},[posts]);
+  const topPosters=useMemo(()=>{const m={};posts.forEach(p=>{if(!p.postedBy)return;if(!m[p.postedBy])m[p.postedBy]={name:p.postedBy,count:0,impressions:0,engs:[]};m[p.postedBy].count++;m[p.postedBy].impressions+=p.impressions;m[p.postedBy].engs.push(p.engRate);});return Object.values(m).map(x=>({...x,avgEng:x.engs.reduce((a,v)=>a+v,0)/x.engs.length})).sort((a,b)=>b.impressions-a.impressions).slice(0,6);},[posts]);
+  const globalStats=useMemo(()=>({totalImpressions:sum(metrics,"impressionsTotal"),organicImpressions:sum(metrics,"impressionsOrganic"),totalPosts:posts.length,tagged:taggedPosts.length,avgEngOrganic:avg(metrics,"engRateOrganic")}),[metrics,posts,taggedPosts]);
+  const TABS=[{id:"overview",label:"📊 Overview"},{id:"trends",label:"📈 Daily Trends"},{id:"followers",label:"👥 Follower Growth"},{id:"posts",label:"🏷️ Tag Posts"},{id:"compare",label:"⚖️ Tag Analysis"}];
+  const C={card:{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:"20px 24px"},title:{fontWeight:700,fontSize:15,marginBottom:14}};
+
+  return(
+    <div style={{fontFamily:"'DM Sans',sans-serif",background:"#f8f9fb",minHeight:"100vh"}}>
+      {/* ── Header ── */}
+      <div style={{background:"#fff",borderBottom:"1px solid #e5e7eb",padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",height:54,position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 3px rgba(0,0,0,.05)",gap:8,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:30,height:30,borderRadius:7,background:"#0a66c2",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <svg width="15" height="15" fill="white" viewBox="0 0 24 24"><path d="M16 8a6 6 0 016 6v7h-4v-7a2 2 0 00-2-2 2 2 0 00-2 2v7h-4v-7a6 6 0 016-6zM2 9h4v12H2z"/><circle cx="4" cy="4" r="2"/></svg>
+          </div>
+          <span style={{fontWeight:700,fontSize:15}}>Posit LinkedIn Analytics</span>
+          {isDemo&&<span style={{fontSize:10,background:"#fef3c7",color:"#92400e",padding:"2px 7px",borderRadius:4,fontWeight:700}}>DEMO — load your CSVs →</span>}
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+          {[{ref:postsRef,label:"📋 Posts CSV",parser:parsePostsCSV,onSuccess:d=>{setPosts(d);setIsDemo(false);}},{ref:metricsRef,label:"📈 Metrics CSV",parser:parseMetricsCSV,onSuccess:setMetrics},{ref:followersRef,label:"👥 Followers CSV",parser:parseFollowersCSV,onSuccess:setFollowers}].map(({ref,label,parser,onSuccess})=>(
+            <label key={label} style={{cursor:"pointer"}}>
+              <input ref={ref} type="file" accept=".csv" style={{display:"none"}} onChange={()=>readFile(ref,parser,onSuccess)}/>
+              <span style={{fontSize:12,padding:"5px 11px",borderRadius:7,border:"1px solid #e5e7eb",background:"#f9fafb",color:"#374151",cursor:"pointer",fontWeight:500,whiteSpace:"nowrap",display:"inline-block"}}>{label}</span>
+            </label>
+          ))}
+          <button onClick={exportCSV} style={{fontSize:12,padding:"5px 13px",borderRadius:7,background:"#0a66c2",color:"#fff",border:"none",cursor:"pointer",fontWeight:600}}>↓ Export Tagged</button>
+        </div>
+      </div>
+
+      {/* ── Nav ── */}
+      <div style={{background:"#fff",borderBottom:"1px solid #e5e7eb",padding:"0 24px",display:"flex",alignItems:"center",overflowX:"auto"}}>
+        {TABS.map(t=>(<button key={t.id} className="tbtn" onClick={()=>setTab(t.id)} style={{padding:"11px 16px",fontSize:13,fontWeight:600,border:"none",borderBottom:`2px solid ${tab===t.id?"#0a66c2":"transparent"}`,color:tab===t.id?"#0a66c2":"#6b7280",background:"transparent",whiteSpace:"nowrap"}}>{t.label}</button>))}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,paddingLeft:16,flexShrink:0}}>
+          <span style={{fontSize:11,color:"#9ca3af"}}>{globalStats.tagged}/{globalStats.totalPosts} tagged</span>
+          <div style={{width:90,height:4,borderRadius:99,background:"#f3f4f6",overflow:"hidden"}}><div style={{width:`${globalStats.totalPosts?(globalStats.tagged/globalStats.totalPosts*100):0}%`,height:"100%",background:"#0a66c2",borderRadius:99,transition:"width .4s"}}></div></div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:1200,margin:"0 auto",padding:24}}>
+
+        {/* ── OVERVIEW ── */}
+        {tab==="overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+            <KpiCard label="Total Impressions" value={fmt(globalStats.totalImpressions)} sub="Organic + Sponsored" accent="#111827"/>
+            <KpiCard label="Organic Impressions" value={fmt(globalStats.organicImpressions)} sub={`${pct(globalStats.organicImpressions/Math.max(globalStats.totalImpressions,1))} of total`} accent="#0a66c2"/>
+            <KpiCard label="Avg Organic Eng Rate" value={pct(globalStats.avgEngOrganic)} sub="Across date range" accent="#10b981"/>
+            <KpiCard label="Total Posts" value={fmt(globalStats.totalPosts)} sub={`${globalStats.tagged} tagged`} accent="#8b5cf6"/>
+          </div>
+          <div style={{...C.card}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={C.title}>Monthly Performance</div>
+              <div style={{display:"flex",gap:6}}>{["impressions","engagement","clicks"].map(v=>(<button key={v} className="tbtn" onClick={()=>setChartView(v)} style={{fontSize:11,padding:"4px 10px",borderRadius:6,border:"1px solid #e5e7eb",background:chartView===v?"#0a66c2":"#f9fafb",color:chartView===v?"#fff":"#6b7280",fontWeight:600,textTransform:"capitalize"}}>{v}</button>))}</div>
+            </div>
+            <ResponsiveContainer width="100%" height={240}>
+              {chartView==="impressions"?(<AreaChart data={monthlyMetrics}><defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0a66c2" stopOpacity={.3}/><stop offset="100%" stopColor="#0a66c2" stopOpacity={0}/></linearGradient><linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f59e0b" stopOpacity={.3}/><stop offset="100%" stopColor="#f59e0b" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="label" tick={{fontSize:10,fill:"#9ca3af"}}/><YAxis tickFormatter={fmt} tick={{fontSize:10,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Legend iconSize={10} wrapperStyle={{fontSize:11}}/><Area type="monotone" dataKey="Organic" stroke="#0a66c2" fill="url(#g1)" strokeWidth={2}/><Area type="monotone" dataKey="Sponsored" stroke="#f59e0b" fill="url(#g2)" strokeWidth={2}/></AreaChart>)
+              :chartView==="engagement"?(<LineChart data={monthlyMetrics}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="label" tick={{fontSize:10,fill:"#9ca3af"}}/><YAxis tickFormatter={v=>pct(v)} tick={{fontSize:10,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Line type="monotone" dataKey="Avg Eng Rate" stroke="#10b981" strokeWidth={2} dot={false}/></LineChart>)
+              :(<BarChart data={monthlyMetrics}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="label" tick={{fontSize:10,fill:"#9ca3af"}}/><YAxis tickFormatter={fmt} tick={{fontSize:10,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Bar dataKey="Clicks" fill="#8b5cf6" radius={[3,3,0,0]}/></BarChart>)}
+            </ResponsiveContainer>
+          </div>
+          <div style={{...C.card}}><div style={C.title}>Top Authors by Impressions</div><div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>{topPosters.map(p=>(<div key={p.name} style={{border:"1px solid #f3f4f6",borderRadius:10,padding:"12px 14px"}}><div style={{fontWeight:600,fontSize:13,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div><div style={{display:"flex",gap:10,fontSize:12,color:"#6b7280"}}><span>{p.count} posts</span><span style={{fontWeight:700,color:"#0a66c2"}}>{fmt(p.impressions)}</span><span style={{color:"#10b981"}}>{pct(p.avgEng)} eng</span></div></div>))}</div></div>
+        </div>}
+
+        {/* ── DAILY TRENDS ── */}
+        {tab==="trends"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{...C.card}}><div style={C.title}>Daily Organic vs Sponsored Impressions</div>
+            <ResponsiveContainer width="100%" height={260}><AreaChart data={metrics.map(m=>({date:m.date,Organic:m.impressionsOrganic,Sponsored:m.impressionsSponsored}))}><defs><linearGradient id="tg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0a66c2" stopOpacity={.4}/><stop offset="100%" stopColor="#0a66c2" stopOpacity={0}/></linearGradient><linearGradient id="tg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f59e0b" stopOpacity={.4}/><stop offset="100%" stopColor="#f59e0b" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:9,fill:"#9ca3af"}} interval={Math.max(1,Math.floor(metrics.length/12))}/><YAxis tickFormatter={fmt} tick={{fontSize:10,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Legend iconSize={10} wrapperStyle={{fontSize:11}}/><Area type="monotone" dataKey="Organic" stroke="#0a66c2" fill="url(#tg1)" strokeWidth={1.5}/><Area type="monotone" dataKey="Sponsored" stroke="#f59e0b" fill="url(#tg2)" strokeWidth={1.5}/></AreaChart></ResponsiveContainer>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            <div style={{...C.card}}><div style={C.title}>Organic Engagement Rate</div><ResponsiveContainer width="100%" height={180}><LineChart data={metrics.map(m=>({date:m.date,"Eng Rate":m.engRateOrganic}))}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:9,fill:"#9ca3af"}} interval={Math.max(1,Math.floor(metrics.length/8))}/><YAxis tickFormatter={v=>pct(v)} tick={{fontSize:9,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Line type="monotone" dataKey="Eng Rate" stroke="#10b981" strokeWidth={1.5} dot={false}/></LineChart></ResponsiveContainer></div>
+            <div style={{...C.card}}><div style={C.title}>Daily Reactions + Comments + Reposts</div><ResponsiveContainer width="100%" height={180}><BarChart data={metrics.map(m=>({date:m.date,Reactions:m.reactionsOrganic,Comments:m.commentsOrganic,Reposts:m.repostsOrganic}))}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:9,fill:"#9ca3af"}} interval={Math.max(1,Math.floor(metrics.length/8))}/><YAxis tick={{fontSize:9,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Legend iconSize={8} wrapperStyle={{fontSize:10}}/><Bar dataKey="Reactions" stackId="a" fill="#0a66c2"/><Bar dataKey="Comments" stackId="a" fill="#10b981"/><Bar dataKey="Reposts" stackId="a" fill="#8b5cf6" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div>
+          </div>
+        </div>}
+
+        {/* ── FOLLOWER GROWTH ── */}
+        {tab==="followers"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{...C.card}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+              <div><div style={C.title}>Total Follower Count Over Time</div><div style={{fontSize:12,color:"#9ca3af",marginTop:-10}}>Tracks the growth story — old strategy vs current</div></div>
+              {isDemo&&<span style={{fontSize:11,background:"#fef3c7",color:"#92400e",padding:"3px 8px",borderRadius:6,fontWeight:600,flexShrink:0}}>Demo data</span>}
+            </div>
+            <ResponsiveContainer width="100%" height={280}><AreaChart data={followers.map(f=>({date:f.date,"Total Followers":f.total}))}><defs><linearGradient id="fg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0a66c2" stopOpacity={.4}/><stop offset="100%" stopColor="#0a66c2" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:10,fill:"#9ca3af"}} interval={Math.max(0,Math.floor(followers.length/10)-1)}/><YAxis tickFormatter={fmt} tick={{fontSize:10,fill:"#9ca3af"}} domain={['auto','auto']}/><Tooltip content={<Tip/>}/><Area type="monotone" dataKey="Total Followers" stroke="#0a66c2" fill="url(#fg1)" strokeWidth={2}/></AreaChart></ResponsiveContainer>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            <div style={{...C.card}}><div style={C.title}>New Followers Gained per Period</div><ResponsiveContainer width="100%" height={200}><BarChart data={followers.map(f=>({date:f.date,"New Followers":f.gained}))}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:9,fill:"#9ca3af"}} interval={Math.max(0,Math.floor(followers.length/8)-1)}/><YAxis tickFormatter={fmt} tick={{fontSize:9,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Bar dataKey="New Followers" fill="#10b981" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div>
+            <div style={{...C.card}}><div style={C.title}>Net Follower Change (Gained − Lost)</div><ResponsiveContainer width="100%" height={200}><BarChart data={followers.map(f=>({date:f.date,"Net Change":f.gained-f.lost}))}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="date" tick={{fontSize:9,fill:"#9ca3af"}} interval={Math.max(0,Math.floor(followers.length/8)-1)}/><YAxis tick={{fontSize:9,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Bar dataKey="Net Change" fill="#10b981" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div>
+          </div>
+          <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:10,padding:"16px 18px",fontSize:13,color:"#0c4a6e",lineHeight:1.7}}><strong>Key Insight:</strong> This chart tells the story of how changes in content strategy affect organic follower growth. Look for inflection points where new follower acquisition slowed — this often correlates with a shift toward sponsored-heavy distribution or a change in content mix.</div>
+        </div>}
+
+        {/* ── TAG POSTS ── */}
+        {tab==="posts"&&<div>
+          <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search posts or authors..." style={{flex:1,minWidth:180,padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,outline:"none"}}/>
+            <select value={tagFilter} onChange={e=>setTagFilter(e.target.value)} style={{padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,outline:"none",background:"#fff",color:"#374151"}}><option value="all">All Content Tags</option><option value="untagged">Untagged</option><option value="open-source">Open Source</option><option value="enterprise">Enterprise</option><option value="both">Both</option></select>
+            <select value={distroFilter} onChange={e=>setDistroFilter(e.target.value)} style={{padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,outline:"none",background:"#fff",color:"#374151"}}><option value="all">Organic + Sponsored</option><option value="organic">Organic Only</option><option value="sponsored">Sponsored Only</option></select>
+            <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,outline:"none",background:"#fff",color:"#374151"}}><option value="date">Newest First</option><option value="impressions">Top Impressions</option><option value="engRate">Top Engagement</option><option value="likes">Most Liked</option></select>
+            <span style={{fontSize:12,color:"#9ca3af"}}>{filteredPosts.length} posts</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {filteredPosts.map(post=>(
+              <div key={post.id} className="pcard" style={{background:"#fff",borderRadius:10,border:`1px solid ${expanded===post.id?"#93c5fd":"#e5e7eb"}`,overflow:"hidden"}} onClick={()=>setExpanded(expanded===post.id?null:post.id)}>
+                <div style={{padding:"12px 16px",display:"flex",alignItems:"flex-start",gap:12}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}><TagBadge tag={post.tag}/><DistroBadge tag={post.distroTag}/><span style={{fontSize:11,color:"#9ca3af"}}>{post.date}</span>{post.postedBy&&<><span style={{fontSize:11,color:"#d1d5db"}}>·</span><span style={{fontSize:11,color:"#6b7280",fontWeight:500}}>{post.postedBy}</span></>}</div>
+                    <p style={{fontSize:13,color:"#374151",lineHeight:1.5,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{post.title}</p>
+                  </div>
+                  <div style={{display:"flex",gap:14,flexShrink:0}}>{[["Impressions",fmt(post.impressions)],["Eng Rate",pct(post.engRate)],["Likes",post.likes],["Clicks",post.clicks]].map(([l,v])=>(<div key={l} style={{textAlign:"right"}}><div style={{fontSize:14,fontWeight:700,color:"#111827"}}>{v}</div><div style={{fontSize:10,color:"#9ca3af"}}>{l}</div></div>))}</div>
+                </div>
+                {expanded===post.id&&(
+                  <div style={{borderTop:"1px solid #f0f0f0",padding:"14px 16px",background:"#fafafa"}} onClick={e=>e.stopPropagation()}>
+                    <p style={{fontSize:12,color:"#4b5563",lineHeight:1.8,marginBottom:12,whiteSpace:"pre-wrap",maxHeight:160,overflowY:"auto",background:"#fff",border:"1px solid #f3f4f6",borderRadius:8,padding:"10px 14px"}}>{post.title}</p>
+                    <div style={{display:"flex",gap:16,fontSize:12,color:"#6b7280",marginBottom:14,flexWrap:"wrap"}}><span>👁 {fmt(post.impressions)}</span><span>👍 {post.likes}</span><span>💬 {post.comments}</span><span>🔁 {post.reposts}</span><span>🖱 {post.clicks}</span><span>📊 {pct(post.engRate)}</span></div>
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Content Tag</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                        {Object.entries(TAG_META).map(([k,m])=>(<button key={k} className="tbtn" onClick={()=>setTag(post.id,k)} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${post.tag===k?m.color:"#e5e7eb"}`,background:post.tag===k?m.bg:"#fff",color:post.tag===k?m.text:"#6b7280",fontSize:12,fontWeight:700}}>{m.label}</button>))}
+                        {post.tag&&<button className="tbtn" onClick={()=>setTag(post.id,null)} style={{padding:"6px 12px",borderRadius:8,border:"2px solid #fecaca",background:"#fff",color:"#ef4444",fontSize:12,fontWeight:700}}>Clear</button>}
+                      </div>
+                    </div>
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Distribution</div>
+                      <div style={{display:"flex",gap:8}}>{Object.entries(DISTRO_META).map(([k,m])=>(<button key={k} className="tbtn" onClick={()=>setDistroTag(post.id,k)} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${post.distroTag===k?m.color:"#e5e7eb"}`,background:post.distroTag===k?m.bg:"#fff",color:post.distroTag===k?m.text:"#6b7280",fontSize:12,fontWeight:700}}>{m.label}</button>))}</div>
+                    </div>
+                    {post.link&&post.link.startsWith("http")&&<a href={post.link} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"#0a66c2",textDecoration:"none",fontWeight:600,padding:"6px 12px",borderRadius:8,border:"1px solid #dbeafe",background:"#eff6ff",display:"inline-block"}}>View on LinkedIn ↗</a>}
+                  </div>
+                )}
+              </div>
+            ))}
+            {filteredPosts.length===0&&<div style={{textAlign:"center",padding:60,color:"#9ca3af",fontSize:14}}>No posts match your filters.</div>}
+          </div>
+        </div>}
+
+        {/* ── TAG ANALYSIS ── */}
+        {tab==="compare"&&(taggedPosts.length===0?(
+          <div style={{textAlign:"center",padding:80,color:"#9ca3af"}}><div style={{fontSize:48,marginBottom:12}}>🏷️</div><div style={{fontSize:18,fontWeight:600,color:"#6b7280"}}>No posts tagged yet</div><div style={{fontSize:13,marginTop:4}}>Go to "Tag Posts" to start categorizing</div></div>
+        ):(
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+              {Object.entries(TAG_META).map(([k,m])=>{const st=tagStats[k];return(
+                <div key={k} style={{background:"#fff",borderRadius:12,border:`1px solid ${m.border}`,padding:"18px 20px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}><span style={{width:10,height:10,borderRadius:"50%",background:m.color,display:"inline-block"}}></span><span style={{fontWeight:700,fontSize:15}}>{m.label}</span><span style={{marginLeft:"auto",fontSize:12,color:"#9ca3af"}}>{st.count} posts</span></div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{[["Impressions",fmt(st.impressions)],["Avg Eng Rate",pct(st.engRate)],["Total Likes",fmt(st.likes)],["Total Clicks",fmt(st.clicks)]].map(([l,v])=>(<div key={l} style={{background:m.bg,borderRadius:8,padding:"10px 12px"}}><div style={{fontSize:17,fontWeight:800,color:m.text,fontFamily:"'DM Serif Display',serif"}}>{v}</div><div style={{fontSize:10,color:m.text,opacity:.75}}>{l}</div></div>))}</div>
+                  {(st.organic.count>0||st.sponsored.count>0)&&<div style={{marginTop:12,paddingTop:10,borderTop:"1px solid #f3f4f6"}}><div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Distribution Split</div><div style={{display:"flex",gap:8}}>{[{lbl:"Organic",d:st.organic,c:"#0a66c2",bg:"#eff6ff"},{lbl:"Sponsored",d:st.sponsored,c:"#f59e0b",bg:"#fef3c7"}].map(({lbl,d,c,bg})=>(<div key={lbl} style={{flex:1,background:bg,borderRadius:7,padding:"7px 10px"}}><div style={{fontSize:13,fontWeight:800,color:c}}>{d.count}</div><div style={{fontSize:10,color:c,opacity:.8}}>{lbl}</div><div style={{fontSize:11,fontWeight:700,color:c}}>{pct(d.engRate)} eng</div></div>))}</div></div>}
+                </div>
+              );})}
+            </div>
+            <div style={{...C.card}}>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Organic vs Sponsored Performance</div>
+              <div style={{fontSize:12,color:"#9ca3af",marginBottom:16}}>How tagged posts perform by distribution method</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                {[{k:"organic",m:DISTRO_META.organic},{k:"sponsored",m:DISTRO_META.sponsored}].map(({k,m})=>{const st=distroTagStats[k];return(<div key={k} style={{border:`1px solid ${m.border}`,borderRadius:10,padding:16}}><div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12}}><span style={{width:10,height:10,borderRadius:"50%",background:m.color,display:"inline-block"}}></span><span style={{fontWeight:700,fontSize:14}}>{m.label}</span><span style={{marginLeft:"auto",fontSize:12,color:"#9ca3af"}}>{st.count} posts</span></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{[["Impressions",fmt(st.impressions)],["Avg Eng Rate",pct(st.engRate)],["Total Likes",fmt(st.likes)],["Per-Post Imp",st.count?fmt(Math.round(st.impressions/st.count)):"—"]].map(([l,v])=>(<div key={l} style={{background:m.bg,borderRadius:7,padding:"8px 10px"}}><div style={{fontSize:15,fontWeight:800,color:m.text}}>{v}</div><div style={{fontSize:10,color:m.text,opacity:.75}}>{l}</div></div>))}</div></div>);})}
+              </div>
+            </div>
+            <div style={{...C.card}}>
+              <div style={C.title}>Avg Engagement Rate by Content Tag</div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>{Object.entries(TAG_META).map(([k,m])=>{const st=tagStats[k];if(!st.count)return null;const maxEng=Math.max(...Object.values(tagStats).map(x=>x.engRate),.001);return(<div key={k} style={{display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:12,fontWeight:600,width:96,color:"#374151"}}>{m.label}</span><div style={{flex:1,height:26,background:"#f3f4f6",borderRadius:6,overflow:"hidden"}}><div style={{width:`${st.engRate/maxEng*100}%`,height:"100%",background:m.color,borderRadius:6,display:"flex",alignItems:"center",paddingLeft:8,minWidth:40,transition:"width .5s"}}><span style={{fontSize:11,fontWeight:700,color:"#fff",whiteSpace:"nowrap"}}>{pct(st.engRate)}</span></div></div><span style={{fontSize:11,color:"#9ca3af",width:52,textAlign:"right"}}>{st.count} posts</span></div>);})}</div>
+            </div>
+            {postVolumeByMonth.length>0&&<div style={{...C.card}}>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Post Volume by Content Tag Over Time</div>
+              <div style={{fontSize:12,color:"#9ca3af",marginBottom:16}}>Monthly count of Open Source vs Enterprise vs Both</div>
+              <ResponsiveContainer width="100%" height={260}><LineChart data={postVolumeByMonth}><CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/><XAxis dataKey="label" tick={{fontSize:10,fill:"#9ca3af"}}/><YAxis allowDecimals={false} tick={{fontSize:10,fill:"#9ca3af"}}/><Tooltip content={<Tip/>}/><Legend iconSize={10} wrapperStyle={{fontSize:12}}/><Line type="monotone" dataKey="Open Source" stroke="#10b981" strokeWidth={2.5} dot={{r:4,fill:"#10b981"}} activeDot={{r:6}}/><Line type="monotone" dataKey="Enterprise" stroke="#3b82f6" strokeWidth={2.5} dot={{r:4,fill:"#3b82f6"}} activeDot={{r:6}}/><Line type="monotone" dataKey="Both" stroke="#8b5cf6" strokeWidth={2} dot={{r:3,fill:"#8b5cf6"}} activeDot={{r:5}} strokeDasharray="5 3"/></LineChart></ResponsiveContainer>
+            </div>}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {["open-source","enterprise"].map(k=>{const m=TAG_META[k];const top=posts.filter(p=>p.tag===k||p.tag==="both").sort((a,b)=>b.impressions-a.impressions).slice(0,4);return(<div key={k} style={{...C.card}}><div style={{fontWeight:700,fontSize:14,marginBottom:12,display:"flex",gap:8,alignItems:"center"}}><span style={{width:8,height:8,borderRadius:"50%",background:m.color,display:"inline-block"}}></span>Top {m.label} Posts</div>{top.length===0?<div style={{fontSize:12,color:"#9ca3af"}}>No posts tagged yet.</div>:top.map(p=>(<div key={p.id} style={{padding:"8px 0",borderBottom:"1px solid #f3f4f6",display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div style={{flex:1,minWidth:0}}><p style={{fontSize:12,color:"#374151",lineHeight:1.4,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{p.title}</p><DistroBadge tag={p.distroTag}/></div><div style={{flexShrink:0,textAlign:"right"}}><div style={{fontSize:13,fontWeight:700}}>{fmt(p.impressions)}</div><div style={{fontSize:10,color:"#9ca3af"}}>impressions</div></div></div>))}</div>);})}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
